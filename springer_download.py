@@ -31,7 +31,7 @@ class Book(object):
     '''
     Representation of a single e-book.
     '''
-    hash = None
+    book_hash = None
     url = None
     title = None
     subtitle = None
@@ -43,13 +43,13 @@ class Book(object):
     cover_link = None
     cover_path = None
     
-    def __init__(self, hash):
+    def __init__(self, book_hash):
         '''
-        :param hash: Content code of the book
+        :param book_hash: Content code of the book
         :param url: absolute or relative url to the book
         '''
-        self.hash = hash
-        self.url = "http://springerlink.com/content/%s/contents" % hash
+        self.book_hash = book_hash
+        self.url = "http://springerlink.com/content/%s/contents" % book_hash
         self._fetch_book_info()
         self._load_chapters()
         
@@ -251,7 +251,7 @@ def main(argv):
         error("Could not parse command line arguments.")
 
     link = ""
-    hash = ""
+    book_hash = ""
     merge = True
 
     for opt, arg in opts:
@@ -262,27 +262,27 @@ def main(argv):
             if link != "":
                 usage()
                 error("-c and -l arguments are mutually exclusive")
-            hash = arg
+            book_hash = arg
         elif opt in ("-l", "--link"):
-            if hash != "":
+            if book_hash != "":
                 usage()
                 error("-c and -l arguments are mutually exclusive")
-            match = re.match("(https?://)?(www\.)?springer(link)?.(com|de)/(content|.*book)/(?P<hash>[a-z0-9\-]+)/?(\?[^/]*)?$", arg)
+            match = re.match("(https?://)?(www\.)?springer(link)?.(com|de)/(content|.*book)/(?P<book_hash>[a-z0-9\-]+)/?(\?[^/]*)?$", arg)
             if not match:
                 usage()
                 error("Bad link given. See example link.")
-            hash = match.group("hash")
+            book_hash = match.group("book_hash")
         elif opt in ("-n", "--no-merge"):
             merge = False
 
-    if hash == "":
+    if book_hash == "":
         usage()
-        error("Either a link or a hash must be given.")
+        error("Either a link or a book_hash must be given.")
 
     if merge and not findInPath("pdftk") and not findInPath("stapler"):
         error("You have to install pdftk (http://www.accesspdf.com/pdftk/) or stapler (http://github.com/hellerbarde/stapler).")
 
-    book = Book(hash)
+    book = Book(book_hash)
     book.download(merge)
 
     sys.exit()
@@ -355,7 +355,7 @@ def download(url, dst):
                  'Cache-Control': 'max-age=0',
     }
     req = urllib2.Request(url, headers=txheaders)
-    r = urllib2.urlopen(req)
+    urllib2.urlopen(req)
     f = open(dst, 'wb')
     try:
         u = urllib2.urlopen(url)        
