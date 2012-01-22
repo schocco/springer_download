@@ -2,18 +2,199 @@
 
 # -*- coding: utf-8 -*-
 
-import os
-import sys
 import getopt
-import urllib
+import os
 import re
-import tempfile
 import shutil
 import subprocess
+import sys
+import tempfile
+import urllib
+import threading
 
 # Set some kind of User-Agent so we don't get blocked by SpringerLink
 class SpringerURLopener(urllib.FancyURLopener):
     version = "Mozilla 5.0"
+    
+class Book(object):
+    '''
+    Representation of a single e-book.
+    '''
+    hash = None
+    url = None
+    title = None
+    subtitle = None
+    isbn = None
+    chapters = list()
+    edition = None
+    year = None
+    publisher = None
+    cover_link = None
+    cover_path = None
+    
+    def __init__(self, hash):
+        '''
+        :param hash: Content code of the book
+        :param url: absolute or relative url to the book
+        '''
+        self.hash = hash
+        self.url = "http://springerlink.com/content/%s/contents" % hash
+        self._fetch_book_info()
+        
+    def _load_chapters(self, page):
+        'Creates chapter objects and appends them to self.chapters.'
+        for index, match in enumerate(re.finditer('href="([^"]+\.pdf)"', page)):
+            chapterLink = match.group(1)
+            if chapterLink[:7] == "http://": # skip external links
+                continue
+
+            if re.search(r'front-matter.pdf', chapterLink):
+                if front_matter:
+                    continue
+                else:
+                    front_matter = True
+            if re.search(r'back-matter.pdf', chapterLink) and re.search(r'<a href="([^"#]+)"[^>]*>Next</a>', page):
+                continue
+            #skip backmatter if it is in list as second chapter - will be there at the end of the book also
+            if re.search(r'back-matter.pdf', chapterLink):
+                if len(chapters) < 2:
+                    continue
+            if chapterLink[0] == "/":
+                chapterLink = "http://springerlink.com" + chapterLink
+            else:
+                chapterLink = baseLink + chapterLink
+            chapterLink = re.sub("/[^/]+/\.\.", "", chapterLink)
+            chapters.append(Chapter(chapterLink, index))
+
+        # get next page
+        match = re.search(r'<a href="([^"#]+)"[^>]*>Next</a>', page)
+        if match:
+            link = "http://springerlink.com" + match.group(1).replace("&amp;", "&")
+            page = self._get_page(link)
+            self._load_chapters(page)
+        else:
+            if len(chapters) == 0:
+                error("No chapters found - bad link?")
+            else:
+                print "found %d chapters" % len(chapters)
+        
+    def get_path(self):
+        return curDir + "%s/%s.pdf" % (os.getcwd(), sanitizeFilename(bookTitle))
+    
+    def get_file_list(self):
+        fileList = []
+        if self.cover_path:
+            fileList.append(self.cover_path)
+        return fileList + [c.path for c in self.chapters]
+    
+    def _get_page(self, link):
+        ':returns: html source of the given link.'
+        try:
+            loader = SpringerURLopener()
+            page = loader.open(link).read()
+        except IOError, e:
+            error("Bad link given (%s)" % e)
+
+        if re.search(r'403 Forbidden', page):
+            error("Could not access page: 403 Forbidden error.")
+        
+    
+    def _fetch_book_info(self):
+        '''Parses the books Web page to retrieve its information'''
+
+        page = self._get_page(self.url)
+        # get title
+        match = re.search(r'<h1[^<]+class="title">(.+?)(?:<br/>\s*<span class="subtitle">(.+?)</span>\s*)?</h1>', page, re.S)
+        if not match or match.group(1).strip() == "":
+            error("Could not evaluate book title - bad link %s" % link)
+        else:
+            self.title = match.group(1).strip()
+            # remove tags, e.g. <sub>
+            self.title = re.sub(r'<[^>]*?>', '', bookTitle)
+            
+        # get subtitle
+        if match and match.group(2) and match.group(2).strip() != "":
+            self.subtitle = match.group(2).strip()
+
+            # edition
+            #match = re.search(r'<td class="labelName">Edition</td><td class="labelValue">([^<]+)</td>', page)
+            #if match:
+                #bookTitle += " " + match.group(1).strip()
+
+            ## year
+            #match = re.search(r'<td class="labelName">Copyright</td><td class="labelValue">([^<]+)</td>', page)
+            #if match:
+                #bookTitle += " " + match.group(1).strip()
+
+            ## publisher
+            #match = re.search(r'<td class="labelName">Publisher</td><td class="labelValue">([^<]+)</td>', page)
+            #if match:
+                #bookTitle += " - " + match.group(1).strip()
+
+        # coverimage
+        match = re.search(r'<div class="coverImage" title="Cover Image" style="background-image: url\(/content/([^/]+)/cover-medium\.gif\)">', page)
+        if match:
+            self.cover_link = "http://springerlink.com/content/" + match.group(1) + "/cover-large.gif"
+            print "downloading front cover from %s" % coverLink
+            localFile, mimeType = geturl(coverLink, "frontcover")
+            if os.system("convert %s %s.pdf" % (localFile, localFile)) == 0:
+                self.cover_path = "%s.pdf" % localFile
+        
+    def download(self):
+        '''
+        Downloads all chapters to disk.
+        Starts one thread for each chapter
+        '''
+        #FIXME: wrong statement?
+        if self.get_path() == "":
+            error("could not transliterate book title %s" % bookTitle)
+        if os.path.isfile(self.get_path()):
+            error("%s already downloaded" % self.get_path())
+
+        print "\nNow Trying to download book '%s'\n" % self.title
+
+        # setup; set tempDir as working directory
+        tempDir = tempfile.mkdtemp()
+        os.chdir(tempDir)
+        prev_c = None
+        for c in self.chapters:
+            c.setDaemon(True)
+            c.start()
+            #if prev_c is not None:
+            #    prev_c.join(c)
+            #prev_c = c
+        
+        #wait for threads to finish
+        while threading.activeCount()>1:
+            sleep(1)
+            
+            
+
+class Chapter(threading.Thread):
+    '''
+    Representation of a chapter in an e-book.
+    '''
+    url = None
+    path = None
+    index = 0
+    
+    def __init__(self, url, index):
+        threading.Thread.__init__(self)
+        self.url = url
+        self.index = index
+        
+    def run(self):
+        'Downloads the chapter as pdf'
+        print "downloading chapter %d/%d" % (i, len(chapters))
+        localFile, mimeType = geturl(self.url, "%d.pdf" % self.index)
+
+        if mimeType.gettype() != "application/pdf":
+            os.chdir(curDir)
+            shutil.rmtree(tempDir)
+            error("downloaded chapter %s has invalid mime type %s - are you allowed to download %s?" % (chapterLink, mimeType.gettype(), bookTitle))
+
+        self.path = localFile
+        
 
 def pdfcat(fileList, bookTitlePath):
     if findInPath("pdftk") != False:
@@ -75,137 +256,16 @@ def main(argv):
     if merge and not findInPath("pdftk") and not findInPath("stapler"):
         error("You have to install pdftk (http://www.accesspdf.com/pdftk/) or stapler (http://github.com/hellerbarde/stapler).")
 
-    baseLink = "http://springerlink.com/content/" + hash + "/"
-    link = baseLink + "contents/"
-    chapters = list()
-    loader = SpringerURLopener();
-    curDir = os.getcwd()
-
-    bookTitle = ""
-    coverLink = ""
-
-    front_matter = False
-
-    while True:
-        # download page source
-        try:
-            print "fetching book information...\n\t%s" % link
-            page = loader.open(link).read()
-        except IOError, e:
-            error("Bad link given (%s)" % e)
-
-        if re.search(r'403 Forbidden', page):
-            error("Could not access page: 403 Forbidden error.")
-
-        if bookTitle == "":
-            match = re.search(r'<h1[^<]+class="title">(.+?)(?:<br/>\s*<span class="subtitle">(.+?)</span>\s*)?</h1>', page, re.S)
-            if not match or match.group(1).strip() == "":
-                error("Could not evaluate book title - bad link %s" % link)
-            else:
-                bookTitle = match.group(1).strip()
-                # remove tags, e.g. <sub>
-                bookTitle = re.sub(r'<[^>]*?>', '', bookTitle)
-            # subtitle
-            if match and match.group(2) and match.group(2).strip() != "":
-                bookTitle += " - " + match.group(2).strip()
-
-            # edition
-            #match = re.search(r'<td class="labelName">Edition</td><td class="labelValue">([^<]+)</td>', page)
-            #if match:
-                #bookTitle += " " + match.group(1).strip()
-
-            ## year
-            #match = re.search(r'<td class="labelName">Copyright</td><td class="labelValue">([^<]+)</td>', page)
-            #if match:
-                #bookTitle += " " + match.group(1).strip()
-
-            ## publisher
-            #match = re.search(r'<td class="labelName">Publisher</td><td class="labelValue">([^<]+)</td>', page)
-            #if match:
-                #bookTitle += " - " + match.group(1).strip()
-
-            # coverimage
-            match = re.search(r'<div class="coverImage" title="Cover Image" style="background-image: url\(/content/([^/]+)/cover-medium\.gif\)">', page)
-            if match:
-                coverLink = "http://springerlink.com/content/" + match.group(1) + "/cover-large.gif"
-
-            bookTitlePath = curDir + "/%s.pdf" % sanitizeFilename(bookTitle)
-            if bookTitlePath == "":
-                error("could not transliterate book title %s" % bookTitle)
-            if os.path.isfile(bookTitlePath):
-                error("%s already downloaded" % bookTitlePath)
-
-            print "\nNow Trying to download book '%s'\n" % bookTitle
-            #error("foo")
-
-        # get chapters
-        for match in re.finditer('href="([^"]+\.pdf)"', page):
-            chapterLink = match.group(1)
-            if chapterLink[:7] == "http://": # skip external links
-                continue
-
-            if re.search(r'front-matter.pdf', chapterLink):
-                if front_matter:
-                    continue
-                else:
-                    front_matter = True
-            if re.search(r'back-matter.pdf', chapterLink) and re.search(r'<a href="([^"#]+)"[^>]*>Next</a>', page):
-                continue
-            #skip backmatter if it is in list as second chapter - will be there at the end of the book also
-            if re.search(r'back-matter.pdf', chapterLink):
-                if len(chapters)<2:
-                    continue
-
-            chapters.append(chapterLink)
-
-        # get next page
-        match = re.search(r'<a href="([^"#]+)"[^>]*>Next</a>', page)
-        if match:
-            link = "http://springerlink.com" + match.group(1).replace("&amp;", "&")
-        else:
-            break
-
-    if len(chapters) == 0:
-        error("No chapters found - bad link?")
-
-    print "found %d chapters" % len(chapters)
-
-    # setup; set tempDir as working directory
-    tempDir = tempfile.mkdtemp()
-    os.chdir(tempDir)
-
-    i = 1
-    fileList = list()
-
-    for chapterLink in chapters:
-        if chapterLink[0] == "/":
-            chapterLink = "http://springerlink.com" + chapterLink
-        else:
-            chapterLink = baseLink + chapterLink
-        chapterLink = re.sub("/[^/]+/\.\.", "", chapterLink)
-        print "downloading chapter %d/%d" % (i, len(chapters))
-        localFile, mimeType = geturl(chapterLink, "%d.pdf" % i)
-
-        if mimeType.gettype() != "application/pdf":
-            os.chdir(curDir)
-            shutil.rmtree(tempDir)
-            error("downloaded chapter %s has invalid mime type %s - are you allowed to download %s?" % (chapterLink, mimeType.gettype(), bookTitle))
-
-        fileList.append(localFile)
-        i += 1
-
-    if coverLink != "":
-        print "downloading front cover from %s" % coverLink
-        localFile, mimeType = geturl(coverLink, "frontcover")
-        if os.system("convert %s %s.pdf" % (localFile, localFile)) == 0:
-            fileList.insert(0, localFile + ".pdf")
+    book = Book(hash)
+    book.download()
 
     if merge:
         print "merging chapters"
         if len(fileList) == 1:
             shutil.move(fileList[0], bookTitlePath)
         else:
-            pdfcat(fileList, bookTitlePath)
+            fileList = book.get_file_list()
+            pdfcat(fileList, book.get_path())
 
         # cleanup
         os.chdir(curDir)
