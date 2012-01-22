@@ -95,18 +95,6 @@ class Book(object):
             else:
                 print "found %d chapters" % len(self.chapters)
         
-    def get_path(self):
-        return "%s/%s.pdf" % (cwd, sanitizeFilename(self.title))
-    
-    def get_file_list(self):
-        fileList = []
-        if self.cover_path:
-            fileList.append(self.cover_path)
-        for c in self.chapters:
-            if c.path:
-                fileList.append(c.path)
-        return fileList
-    
     def _get_page(self, link):
         ':returns: html source of the given link.'
         try:
@@ -120,8 +108,7 @@ class Book(object):
             error("Could not access page: 403 Forbidden error.")
         
         return page
-        
-    
+          
     def _fetch_book_info(self):
         '''Parses the books Web page to retrieve its information'''
 
@@ -154,25 +141,18 @@ class Book(object):
         Downloads all chapters to disk.
         Starts one thread for each chapter
         '''
-        #FIXME: wrong statement?
-        if self.get_path() == "":
-            error("could not transliterate book title %s" % self.title)
         if os.path.isfile(self.get_path()):
             error("%s already downloaded" % self.get_path())
 
         print "\nNow Trying to download book '%s'\n" % self.title
        
         for c in self.chapters:
-            #c.setDaemon(True)
             print "downloading chapter %d/%d" % (c.index, len(self.chapters))
             c.setDaemon(True)
             c.start()
-            #if prev_c is not None:
-            #    prev_c.join(c)
-            #prev_c = c
         
         #wait for threads to finish
-        while threading.activeCount()>1:
+        while threading.activeCount() > 1:
             sleep(1)
             print "sleeping"
             
@@ -190,12 +170,31 @@ class Book(object):
             shutil.rmtree(tempDir)
     
             print "book %s was successfully downloaded, it was saved to %s" % (self.title, self.get_path())
-            log("downloaded %s chapters (%.2fMiB) of %s\n" % (len(self.chapters),  os.path.getsize(self.get_path())/2.0**20, self.title))
+            log("downloaded %s chapters (%.2fMiB) of %s\n" % (len(self.chapters), os.path.getsize(self.get_path()) / 2.0 ** 20, self.title))
         else: #HL: if merge=False
             print "book %s was successfully downloaded, unmerged chapters can be found in %s" % (self.title, tempDir)
             log("downloaded %s chapters of %s\n" % (len(self.chapters), self.title))
             
+    def get_path(self):
+        '''
+        :return: Path were the final pdf should be saved.
+        '''
+        return "%s/%s.pdf" % (cwd, sanitizeFilename(self.title))
+    
+    def get_file_list(self):
+        '''
+        :return: A list of paths, one for each chapter.
+          Chapters with an empty path attribute are left out.
+        '''
+        fileList = []
+        if self.cover_path:
+            fileList.append(self.cover_path)
+        for c in self.chapters:
+            if c.path:
+                fileList.append(c.path)
+        return fileList
             
+
 
 class Chapter(threading.Thread):
     '''
@@ -214,13 +213,7 @@ class Chapter(threading.Thread):
         
     def run(self):
         'Downloads the chapter as pdf'
-        download(self.url, self.path)
-        #if mimeType != "application/pdf":
-        #    error("""downloaded chapter %s has invalid mime type %s - are you
-        #             allowed to download?""" 
-        #             % (self.path, mimeType.gettype()))
-            #shutil.rmtree(tempDir)
-            #TODO: stop other threads and exit        
+        download(self.url, self.path)      
 
 def pdfcat(fileList, bookTitlePath):
     if findInPath("pdftk") != False:
@@ -316,7 +309,7 @@ def error(msg=""):
     if msg != "":
         log("ERR: " + msg + "\n")
         print "\nERROR: %s\n" % msg
-    #sys.exit(2)
+    sys.exit(2)
 
     return None
 
@@ -346,6 +339,10 @@ def _reporthook(numblocks, blocksize, filesize, url=None):
     sys.stdout.write("%-66s%3d%%" % (url, percent))
 
 def download(url, dst):
+    '''
+    Uses urllib2 to get a remote file.
+    Prints a progress bar and removes the tempFolder if an HttpException occurs.
+    '''
     txheaders = {   
                  'User-agent': 'Mozilla/5.0',
                  'Accept-Language': 'en-us',
@@ -362,23 +359,25 @@ def download(url, dst):
         meta = u.info()
         file_size = int(meta.getheaders("Content-Length")[0])
         mimetype = meta.gettype()
+        #TODO: add check for correct filetype
         print "Downloading: %s Bytes: %s" % (dst, file_size)
     
         file_size_dl = 0
         block_sz = 8192
         while True:
-            buffer = u.read(block_sz)
-            if not buffer:
+            dl_buffer = u.read(block_sz)
+            if not dl_buffer:
                 break
     
-            file_size_dl += len(buffer)
-            f.write(buffer)
+            file_size_dl += len(dl_buffer)
+            f.write(dl_buffer)
             status = r"%10d  [%3.2f%%]" % (file_size_dl, file_size_dl * 100. / file_size)
             status = status + chr(8)*(len(status)+1)
             print status,
     except HTTPError, e:
         print e
-        error("You are not permitted to download %s" % url)
+        shutil.rmtree(tempDir)
+        error("%s - occured while downloading %s" % (e, url))
     finally:
         f.close()
 
