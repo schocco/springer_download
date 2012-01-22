@@ -2,6 +2,8 @@
 
 author:	
 	Milian Wolff <mail@milianw.de> / <http://milianw.de>
+modified:
+	Rocco Schulz <schocco.rulz(ät)gmail.com> / <http://is-gr8.com>
 licencse:
 	GPL v3 (http://www.gnu.org/licenses/gpl.html)
 language:
@@ -11,8 +13,8 @@ language:
 
 springer_download.py is a command-line utility to download educational ebooks
 from http://springerlink.com. You have to have access to the contents hosted
-on this site. The script is _not_ a way to obtion illegal copies of those ebooks.
-Instead it is intended to be used e.g. from your University account which often
+on this site. The script is _not_ a way to obtain illegal copies of those ebooks.
+Instead it is intended to be used e.g. from your university account which often
 have free access to the contents of SpringerLink.
 
 The script downloads all chapters of a book and merges them into one PDF file.
