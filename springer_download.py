@@ -2,6 +2,8 @@
 
 # -*- coding: utf-8 -*-
 
+from time import sleep
+from urllib2 import HTTPError
 import getopt
 import os
 import re
@@ -12,7 +14,8 @@ import tempfile
 import threading
 import urllib
 import urllib2
-from time import sleep
+import httplib
+httplib.HTTPConnection.debuglevel = 1     
 
 
 #CONFIG
@@ -71,12 +74,12 @@ class Book(object):
                 continue
                 #skip backmatter if it is in list as second chapter - will be there at the end of the book also
             if re.search(r'back-matter.pdf', chapterLink):
-                if len(chapters) < 2:
+                if len(self.chapters) < 2:
                     continue
             if chapterLink[0] == "/":
                 chapterLink = "http://springerlink.com" + chapterLink
             else:
-                chapterLink = baseLink + chapterLink
+                chapterLink = "http://springerlink.com/content/" + hash + "/" + chapterLink
             chapterLink = re.sub("/[^/]+/\.\.", "", chapterLink)
             self.chapters.append(Chapter(chapterLink, index))
 
@@ -107,6 +110,7 @@ class Book(object):
     def _get_page(self, link):
         ':returns: html source of the given link.'
         try:
+            print "get page..."
             loader = SpringerURLopener()
             page = loader.open(link).read()
         except IOError, e:
@@ -125,7 +129,7 @@ class Book(object):
         # get title
         match = re.search(r'<h1[^<]+class="title">(.+?)(?:<br/>\s*<span class="subtitle">(.+?)</span>\s*)?</h1>', page, re.S)
         if not match or match.group(1).strip() == "":
-            error("Could not evaluate book title - bad link %s" % link)
+            error("Could not evaluate book title - bad link %s" % self.url)
         else:
             self.title = match.group(1).strip()
             # remove tags, e.g. <sub>
@@ -140,9 +144,10 @@ class Book(object):
         if match:
             self.cover_link = "http://springerlink.com/content/" + match.group(1) + "/cover-large.gif"
             print "downloading front cover from %s" % self.cover_link
-            localFile, mimeType = geturl(self.cover_link, os.path.join(tempDir, "frontcover"))
-            if os.system("convert %s %s.pdf" % (os.path.join(tempDir, localFile), os.path.join(tempDir, localFile))) == 0:
-                self.cover_path = os.path.join(tempDir, "%s.pdf" % localFile)
+            dst = os.path.join(tempDir, "frontcover")
+            download(self.cover_link, dst)
+            if os.system("convert %s %s.pdf" % (dst, dst)) == 0:
+                self.cover_path = os.path.join("%s.pdf" % dst)
         
     def download(self, merge):
         '''
@@ -157,7 +162,6 @@ class Book(object):
 
         print "\nNow Trying to download book '%s'\n" % self.title
        
-        prev_c = None
         for c in self.chapters:
             #c.setDaemon(True)
             print "downloading chapter %d/%d" % (c.index, len(self.chapters))
@@ -177,7 +181,7 @@ class Book(object):
             fileList = self.get_file_list()
             print fileList
             if len(fileList) == 1:
-                shutil.move(fileList[0], book.get_path())
+                shutil.move(fileList[0], self.get_path())
             else:
                 pdfcat(fileList, self.get_path())
     
@@ -189,7 +193,7 @@ class Book(object):
             log("downloaded %s chapters (%.2fMiB) of %s\n" % (len(self.chapters),  os.path.getsize(self.get_path())/2.0**20, self.title))
         else: #HL: if merge=False
             print "book %s was successfully downloaded, unmerged chapters can be found in %s" % (self.title, tempDir)
-            log("downloaded %s chapters of %s\n" % (len(self.chapters), bookTitle))
+            log("downloaded %s chapters of %s\n" % (len(self.chapters), self.title))
             
             
 
@@ -210,11 +214,11 @@ class Chapter(threading.Thread):
         
     def run(self):
         'Downloads the chapter as pdf'
-        localFile, mimeType = geturl(self.url, self.path)
-        if mimeType.gettype() != "application/pdf":
-            error("""downloaded chapter %s has invalid mime type %s - are you
-                     allowed to download?""" 
-                     % (self.path, mimeType.gettype()))
+        download(self.url, self.path)
+        #if mimeType != "application/pdf":
+        #    error("""downloaded chapter %s has invalid mime type %s - are you
+        #             allowed to download?""" 
+        #             % (self.path, mimeType.gettype()))
             #shutil.rmtree(tempDir)
             #TODO: stop other threads and exit        
 
@@ -272,8 +276,8 @@ def main(argv):
             merge = False
 
     if hash == "":
-      usage()
-      error("Either a link or a hash must be given.")
+        usage()
+        error("Either a link or a hash must be given.")
 
     if merge and not findInPath("pdftk") and not findInPath("stapler"):
         error("You have to install pdftk (http://www.accesspdf.com/pdftk/) or stapler (http://github.com/hellerbarde/stapler).")
@@ -342,28 +346,41 @@ def _reporthook(numblocks, blocksize, filesize, url=None):
     sys.stdout.write("%-66s%3d%%" % (url, percent))
 
 def download(url, dst):
-    req = urllib2.Request(url)
-    req.add_header('User-agent', 'Mozilla/5.0')
+    txheaders = {   
+                 'User-agent': 'Mozilla/5.0',
+                 'Accept-Language': 'en-us',
+                 'Accept-Encoding': 'gzip, deflate, compress;q=0.9',
+                 'Keep-Alive': '300',
+                 'Connection': 'keep-alive',
+                 'Cache-Control': 'max-age=0',
+    }
+    req = urllib2.Request(url, headers=txheaders)
     r = urllib2.urlopen(req)
-    u = urllib2.urlopen(url)
     f = open(dst, 'wb')
-    meta = u.info()
-    file_size = int(meta.getheaders("Content-Length")[0])
-    print "Downloading: %s Bytes: %s" % (file_name, file_size)
+    try:
+        u = urllib2.urlopen(url)        
+        meta = u.info()
+        file_size = int(meta.getheaders("Content-Length")[0])
+        mimetype = meta.gettype()
+        print "Downloading: %s Bytes: %s" % (dst, file_size)
     
-    file_size_dl = 0
-    block_sz = 8192
-    while True:
-        buffer = u.read(block_sz)
-        if not buffer:
-            break
+        file_size_dl = 0
+        block_sz = 8192
+        while True:
+            buffer = u.read(block_sz)
+            if not buffer:
+                break
     
-        file_size_dl += len(buffer)
-        f.write(buffer)
-        status = r"%10d  [%3.2f%%]" % (file_size_dl, file_size_dl * 100. / file_size)
-        status = status + chr(8)*(len(status)+1)
-        print status,    
-    f.close()
+            file_size_dl += len(buffer)
+            f.write(buffer)
+            status = r"%10d  [%3.2f%%]" % (file_size_dl, file_size_dl * 100. / file_size)
+            status = status + chr(8)*(len(status)+1)
+            print status,
+    except HTTPError, e:
+        print e
+        error("You are not permitted to download %s" % url)
+    finally:
+        f.close()
 
 
 
