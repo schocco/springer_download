@@ -9,8 +9,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import urllib
 import threading
+import urllib
+import urllib2
+from time import sleep
+
+
+#CONFIG
+#TODO: add global conf
+tempDir = tempfile.mkdtemp()
+cwd = os.getcwd()
 
 # Set some kind of User-Agent so we don't get blocked by SpringerLink
 class SpringerURLopener(urllib.FancyURLopener):
@@ -40,22 +48,28 @@ class Book(object):
         self.hash = hash
         self.url = "http://springerlink.com/content/%s/contents" % hash
         self._fetch_book_info()
+        self._load_chapters()
         
-    def _load_chapters(self, page):
+    def _load_chapters(self, page=None):
         'Creates chapter objects and appends them to self.chapters.'
+        if page is None:
+            page = self._get_page(self.url)
+            front_matter = False
+            
         for index, match in enumerate(re.finditer('href="([^"]+\.pdf)"', page)):
             chapterLink = match.group(1)
             if chapterLink[:7] == "http://": # skip external links
                 continue
-
+            
             if re.search(r'front-matter.pdf', chapterLink):
                 if front_matter:
                     continue
                 else:
                     front_matter = True
+            
             if re.search(r'back-matter.pdf', chapterLink) and re.search(r'<a href="([^"#]+)"[^>]*>Next</a>', page):
                 continue
-            #skip backmatter if it is in list as second chapter - will be there at the end of the book also
+                #skip backmatter if it is in list as second chapter - will be there at the end of the book also
             if re.search(r'back-matter.pdf', chapterLink):
                 if len(chapters) < 2:
                     continue
@@ -64,7 +78,7 @@ class Book(object):
             else:
                 chapterLink = baseLink + chapterLink
             chapterLink = re.sub("/[^/]+/\.\.", "", chapterLink)
-            chapters.append(Chapter(chapterLink, index))
+            self.chapters.append(Chapter(chapterLink, index))
 
         # get next page
         match = re.search(r'<a href="([^"#]+)"[^>]*>Next</a>', page)
@@ -73,19 +87,22 @@ class Book(object):
             page = self._get_page(link)
             self._load_chapters(page)
         else:
-            if len(chapters) == 0:
+            if len(self.chapters) == 0:
                 error("No chapters found - bad link?")
             else:
-                print "found %d chapters" % len(chapters)
+                print "found %d chapters" % len(self.chapters)
         
     def get_path(self):
-        return curDir + "%s/%s.pdf" % (os.getcwd(), sanitizeFilename(bookTitle))
+        return "%s/%s.pdf" % (cwd, sanitizeFilename(self.title))
     
     def get_file_list(self):
         fileList = []
         if self.cover_path:
             fileList.append(self.cover_path)
-        return fileList + [c.path for c in self.chapters]
+        for c in self.chapters:
+            if c.path:
+                fileList.append(c.path)
+        return fileList
     
     def _get_page(self, link):
         ':returns: html source of the given link.'
@@ -97,6 +114,8 @@ class Book(object):
 
         if re.search(r'403 Forbidden', page):
             error("Could not access page: 403 Forbidden error.")
+        
+        return page
         
     
     def _fetch_book_info(self):
@@ -110,54 +129,38 @@ class Book(object):
         else:
             self.title = match.group(1).strip()
             # remove tags, e.g. <sub>
-            self.title = re.sub(r'<[^>]*?>', '', bookTitle)
+            self.title = re.sub(r'<[^>]*?>', '', self.title)
             
         # get subtitle
         if match and match.group(2) and match.group(2).strip() != "":
             self.subtitle = match.group(2).strip()
 
-            # edition
-            #match = re.search(r'<td class="labelName">Edition</td><td class="labelValue">([^<]+)</td>', page)
-            #if match:
-                #bookTitle += " " + match.group(1).strip()
-
-            ## year
-            #match = re.search(r'<td class="labelName">Copyright</td><td class="labelValue">([^<]+)</td>', page)
-            #if match:
-                #bookTitle += " " + match.group(1).strip()
-
-            ## publisher
-            #match = re.search(r'<td class="labelName">Publisher</td><td class="labelValue">([^<]+)</td>', page)
-            #if match:
-                #bookTitle += " - " + match.group(1).strip()
-
         # coverimage
         match = re.search(r'<div class="coverImage" title="Cover Image" style="background-image: url\(/content/([^/]+)/cover-medium\.gif\)">', page)
         if match:
             self.cover_link = "http://springerlink.com/content/" + match.group(1) + "/cover-large.gif"
-            print "downloading front cover from %s" % coverLink
-            localFile, mimeType = geturl(coverLink, "frontcover")
-            if os.system("convert %s %s.pdf" % (localFile, localFile)) == 0:
-                self.cover_path = "%s.pdf" % localFile
+            print "downloading front cover from %s" % self.cover_link
+            localFile, mimeType = geturl(self.cover_link, os.path.join(tempDir, "frontcover"))
+            if os.system("convert %s %s.pdf" % (os.path.join(tempDir, localFile), os.path.join(tempDir, localFile))) == 0:
+                self.cover_path = os.path.join(tempDir, "%s.pdf" % localFile)
         
-    def download(self):
+    def download(self, merge):
         '''
         Downloads all chapters to disk.
         Starts one thread for each chapter
         '''
         #FIXME: wrong statement?
         if self.get_path() == "":
-            error("could not transliterate book title %s" % bookTitle)
+            error("could not transliterate book title %s" % self.title)
         if os.path.isfile(self.get_path()):
             error("%s already downloaded" % self.get_path())
 
         print "\nNow Trying to download book '%s'\n" % self.title
-
-        # setup; set tempDir as working directory
-        tempDir = tempfile.mkdtemp()
-        os.chdir(tempDir)
+       
         prev_c = None
         for c in self.chapters:
+            #c.setDaemon(True)
+            print "downloading chapter %d/%d" % (c.index, len(self.chapters))
             c.setDaemon(True)
             c.start()
             #if prev_c is not None:
@@ -167,6 +170,26 @@ class Book(object):
         #wait for threads to finish
         while threading.activeCount()>1:
             sleep(1)
+            print "sleeping"
+            
+        if merge:
+            print "merging chapters"
+            fileList = self.get_file_list()
+            print fileList
+            if len(fileList) == 1:
+                shutil.move(fileList[0], book.get_path())
+            else:
+                pdfcat(fileList, self.get_path())
+    
+            # cleanup
+            os.chdir(cwd)
+            shutil.rmtree(tempDir)
+    
+            print "book %s was successfully downloaded, it was saved to %s" % (self.title, self.get_path())
+            log("downloaded %s chapters (%.2fMiB) of %s\n" % (len(self.chapters),  os.path.getsize(self.get_path())/2.0**20, self.title))
+        else: #HL: if merge=False
+            print "book %s was successfully downloaded, unmerged chapters can be found in %s" % (self.title, tempDir)
+            log("downloaded %s chapters of %s\n" % (len(self.chapters), bookTitle))
             
             
 
@@ -182,19 +205,18 @@ class Chapter(threading.Thread):
         threading.Thread.__init__(self)
         self.url = url
         self.index = index
+        self.path = os.path.join(tempDir, "%d.pdf" % self.index)
+        print "initialized chapter with index %d and url %s" % (self.index, self.url)
         
     def run(self):
         'Downloads the chapter as pdf'
-        print "downloading chapter %d/%d" % (i, len(chapters))
-        localFile, mimeType = geturl(self.url, "%d.pdf" % self.index)
-
+        localFile, mimeType = geturl(self.url, self.path)
         if mimeType.gettype() != "application/pdf":
-            os.chdir(curDir)
-            shutil.rmtree(tempDir)
-            error("downloaded chapter %s has invalid mime type %s - are you allowed to download %s?" % (chapterLink, mimeType.gettype(), bookTitle))
-
-        self.path = localFile
-        
+            error("""downloaded chapter %s has invalid mime type %s - are you
+                     allowed to download?""" 
+                     % (self.path, mimeType.gettype()))
+            #shutil.rmtree(tempDir)
+            #TODO: stop other threads and exit        
 
 def pdfcat(fileList, bookTitlePath):
     if findInPath("pdftk") != False:
@@ -257,25 +279,7 @@ def main(argv):
         error("You have to install pdftk (http://www.accesspdf.com/pdftk/) or stapler (http://github.com/hellerbarde/stapler).")
 
     book = Book(hash)
-    book.download()
-
-    if merge:
-        print "merging chapters"
-        if len(fileList) == 1:
-            shutil.move(fileList[0], bookTitlePath)
-        else:
-            fileList = book.get_file_list()
-            pdfcat(fileList, book.get_path())
-
-        # cleanup
-        os.chdir(curDir)
-        shutil.rmtree(tempDir)
-
-        print "book %s was successfully downloaded, it was saved to %s" % (bookTitle, bookTitlePath)
-        log("downloaded %s chapters (%.2fMiB) of %s\n" % (len(chapters),  os.path.getsize(bookTitlePath)/2.0**20, bookTitle))
-    else: #HL: if merge=False
-        print "book %s was successfully downloaded, unmerged chapters can be found in %s" % (bookTitle, tempDir)
-        log("downloaded %s chapters of %s\n" % (len(chapters), bookTitle))
+    book.download(merge)
 
     sys.exit()
 
@@ -308,13 +312,13 @@ def error(msg=""):
     if msg != "":
         log("ERR: " + msg + "\n")
         print "\nERROR: %s\n" % msg
-    sys.exit(2)
+    #sys.exit(2)
 
     return None
 
 # log to file
 def log(msg=""):
-    logFile = open('springer_download.log', 'a')
+    logFile = open(os.path.join(cwd, 'springer_download.log'), 'a')
     logFile.write(msg)
     logFile.close()
 
@@ -336,6 +340,32 @@ def _reporthook(numblocks, blocksize, filesize, url=None):
     if numblocks != 0:
         sys.stdout.write("\b"*70)
     sys.stdout.write("%-66s%3d%%" % (url, percent))
+
+def download(url, dst):
+    req = urllib2.Request(url)
+    req.add_header('User-agent', 'Mozilla/5.0')
+    r = urllib2.urlopen(req)
+    u = urllib2.urlopen(url)
+    f = open(dst, 'wb')
+    meta = u.info()
+    file_size = int(meta.getheaders("Content-Length")[0])
+    print "Downloading: %s Bytes: %s" % (file_name, file_size)
+    
+    file_size_dl = 0
+    block_sz = 8192
+    while True:
+        buffer = u.read(block_sz)
+        if not buffer:
+            break
+    
+        file_size_dl += len(buffer)
+        f.write(buffer)
+        status = r"%10d  [%3.2f%%]" % (file_size_dl, file_size_dl * 100. / file_size)
+        status = status + chr(8)*(len(status)+1)
+        print status,    
+    f.close()
+
+
 
 def geturl(url, dst):
     downloader = SpringerURLopener()
