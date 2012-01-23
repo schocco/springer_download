@@ -2,6 +2,7 @@
 
 # -*- coding: utf-8 -*-
 
+
 from time import sleep
 from urllib2 import HTTPError
 import getopt
@@ -14,8 +15,7 @@ import tempfile
 import threading
 import urllib
 import urllib2
-import httplib
-httplib.HTTPConnection.debuglevel = 1     
+import mimetypes
 
 
 #CONFIG
@@ -130,6 +130,7 @@ class Book(object):
         match = re.search(r'<div class="coverImage" title="Cover Image" style="background-image: url\(/content/([^/]+)/cover-medium\.gif\)">', page)
         if match:
             self.cover_link = "http://springerlink.com/content/" + match.group(1) + "/cover-large.gif"
+            #TODO: move cover download into a thread
             print "downloading front cover from %s" % self.cover_link
             dst = os.path.join(tempDir, "frontcover")
             download(self.cover_link, dst)
@@ -141,8 +142,8 @@ class Book(object):
         Downloads all chapters to disk.
         Starts one thread for each chapter
         '''
-        if os.path.isfile(self.get_path()):
-            error("%s already downloaded" % self.get_path())
+        if os.path.isfile(self.path):
+            error("%s already downloaded" % self.path)
 
         print "\nNow Trying to download book '%s'\n" % self.title
        
@@ -161,16 +162,16 @@ class Book(object):
             fileList = self.get_file_list()
             print fileList
             if len(fileList) == 1:
-                shutil.move(fileList[0], self.get_path())
+                shutil.move(fileList[0], self.path)
             else:
-                pdfcat(fileList, self.get_path())
+                pdfcat(fileList, self.path)
     
             # cleanup
             os.chdir(cwd)
             shutil.rmtree(tempDir)
     
-            print "book %s was successfully downloaded, it was saved to %s" % (self.title, self.get_path())
-            log("downloaded %s chapters (%.2fMiB) of %s\n" % (len(self.chapters), os.path.getsize(self.get_path()) / 2.0 ** 20, self.title))
+            print "book %s was successfully downloaded, it was saved to %s" % (self.title, self.path)
+            log("downloaded %s chapters (%.2fMiB) of %s\n" % (len(self.chapters), os.path.getsize(self.path) / 2.0 ** 20, self.title))
         else: #HL: if merge=False
             print "book %s was successfully downloaded, unmerged chapters can be found in %s" % (self.title, tempDir)
             log("downloaded %s chapters of %s\n" % (len(self.chapters), self.title))
@@ -180,6 +181,7 @@ class Book(object):
         :return: Path were the final pdf should be saved.
         '''
         return "%s/%s.pdf" % (cwd, sanitizeFilename(self.title))
+    path = property(fget = get_path, doc = "Path were the final pdf should be saved.")
     
     def get_file_list(self):
         '''
@@ -338,11 +340,13 @@ def _reporthook(numblocks, blocksize, filesize, url=None):
         sys.stdout.write("\b"*70)
     sys.stdout.write("%-66s%3d%%" % (url, percent))
 
-def download(url, dst):
+def download(url, dst, mime=None):
     '''
     Uses urllib2 to get a remote file.
     Prints a progress bar and removes the tempFolder if an HttpException occurs.
     '''
+    if mime is None:
+        mime = mimetypes.guess_type(dst)[0]
     txheaders = {   
                  'User-agent': 'Mozilla/5.0',
                  'Accept-Language': 'en-us',
@@ -352,14 +356,13 @@ def download(url, dst):
                  'Cache-Control': 'max-age=0',
     }
     req = urllib2.Request(url, headers=txheaders)
-    urllib2.urlopen(req)
     f = open(dst, 'wb')
     try:
-        u = urllib2.urlopen(url)        
+        u = urllib2.urlopen(req)        
         meta = u.info()
         file_size = int(meta.getheaders("Content-Length")[0])
-        mimetype = meta.gettype()
-        #TODO: add check for correct filetype
+        if mime and meta.gettype() != mime:
+            error("Expected mimetype is %s, got %s instead!" % (mime, meta.gettype()))
         print "Downloading: %s Bytes: %s" % (dst, file_size)
     
         file_size_dl = 0
@@ -376,7 +379,11 @@ def download(url, dst):
             print status,
     except HTTPError, e:
         print e
-        shutil.rmtree(tempDir)
+        try:
+            shutil.rmtree(tempDir)
+        except IOError:
+            #already deleted
+            pass
         error("%s - occured while downloading %s" % (e, url))
     finally:
         f.close()
@@ -384,6 +391,7 @@ def download(url, dst):
 
 
 def geturl(url, dst):
+    ":DEPRECATED:"
     downloader = SpringerURLopener()
     if sys.stdout.isatty():
         response = downloader.retrieve(url, dst,
