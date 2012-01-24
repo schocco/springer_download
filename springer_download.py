@@ -25,6 +25,7 @@ class Book(object):
     '''
     Representation of a single e-book.
     '''
+    BASE_URL_SPRINGER = "http://springerlink.com/"
     
     def __init__(self, book_hash):
         '''
@@ -36,11 +37,11 @@ class Book(object):
         self.subtitle = ""
         self.chapters = []
         self.cover_link = None
+        self.cover_base_path = os.path.join(tempDir, "frontcover.%s")
         
         self.url = "http://springerlink.com/content/%s/contents" % book_hash
         self._fetch_book_info()
         self._load_chapters()
-        self.cover_path = os.path.join(tempDir, "frontcover.pdf")
         
     def _load_chapters(self, page=None):
         'Creates chapter objects and appends them to self.chapters.'
@@ -50,27 +51,27 @@ class Book(object):
             
         for index, match in enumerate(re.finditer('href="([^"]+\.pdf)"', page)):
             chapterLink = match.group(1)
-            if chapterLink[:7] == "http://": # skip external links
-                continue
-                        
+            if not self._get_springer_chapter_link(chapterLink):
+                # skip external links
+                continue    
+             
             if re.search(r'front-matter.pdf', chapterLink):
+                #add front_matter only once
                 if front_matter:
                     continue
                 else:
                     front_matter = True
             
-            if re.search(r'back-matter.pdf', chapterLink) and re.search(r'<a href="([^"#]+)"[^>]*>Next</a>', page):
+            if (re.search(r'back-matter.pdf', chapterLink)
+                and re.search(r'<a href="([^"#]+)"[^>]*>Next</a>', page)
+                or
+                re.search(r'back-matter.pdf', chapterLink) and len(self.chapters) < 2):
+                # ignore occurrence of back_matter.pdf when there is another
+                # page. Will be linked on the last page again.
                 continue
-                #skip backmatter if it is in list as second chapter - will be there at the end of the book also
-            if re.search(r'back-matter.pdf', chapterLink):
-                if len(self.chapters) < 2:
-                    continue
-            if chapterLink[0] == "/":
-                chapterLink = "http://springerlink.com" + chapterLink
-            else:
-                chapterLink = "http://springerlink.com/content/" + hash + "/" + chapterLink
-            chapterLink = re.sub("/[^/]+/\.\.", "", chapterLink)
-            self.chapters.append(Chapter(chapterLink, index))
+
+            chapterLink = self._get_springer_chapter_link(chapterLink)
+            self.chapters.append(Chapter(chapterLink, index))    
 
         # get next page
         match = re.search(r'<a href="([^"#]+)"[^>]*>Next</a>', page)
@@ -83,6 +84,20 @@ class Book(object):
                 error("No chapters found - bad link?")
             else:
                 print "found %d chapters" % len(self.chapters)
+                
+    def _get_springer_chapter_link(self, rel_link):
+        '''
+        :param rel_link: a relative link to a book chapter
+        :return: absolute url to the linked chapter or False when the given
+          link is absolute and not relative. 
+        '''
+        if rel_link.startswith("http://") or rel_link.startswith("https://"):
+            return False
+        if rel_link.startswith("/"):
+            return "%s%s" % (Book.BASE_URL_SPRINGER, rel_link.lstrip("/"))
+        else:
+            base_link = "http://springerlink.com/content/%s/%s/"
+            return base_link % (self.book_hash, rel_link.strip("/"))
         
     def _get_page(self, link):
         ':returns: html source of the given link.'
@@ -128,7 +143,7 @@ class Book(object):
         print "\nNow Trying to download book '%s'\n" % self.title
         #get cover
         if self.cover_link:
-            d = Downloader(self.cover_link, self.cover_path,
+            d = Downloader(self.cover_link, self.cover_base_path % "gif",
                            mimes = ("image/png", "image/gif", "image/jpg"),
                            daemon = False)
             d.start()
@@ -169,14 +184,16 @@ class Book(object):
     
     def get_file_list(self):
         '''
+        Creates a list with the cover image as pdf and all downloaded
+        chapters.
         :return: A list of paths, one for each chapter.
           Chapters with an empty path attribute are left out.
         '''
         fileList = []
         if self.cover_link:
-            dst = os.path.join(tempDir, "frontcover")
-            if os.system("convert %s. %s.pdf" % (dst, dst)) == 0:
-                fileList.append(self.cover_path)
+            dst = self.cover_base_path % "pdf"
+            if os.system("convert %s %s" % (self.cover_base_path % "gif", dst)) == 0:
+                fileList.append(dst)
         for c in self.chapters:
             if c.path:
                 fileList.append(c.path)
@@ -428,10 +445,9 @@ def download(url, dst, mime=None):
 
 def normalize(value):
     """
-    Coverts to lowercase, removes non-alpha characters,
-    and converts spaces to hyphens.
+    Removes non-alpha characters, and converts spaces to hyphens.
     """
-    value = unicode(re.sub('[^\w\s-]', '', value).strip().lower())
+    value = unicode(re.sub('[^\w\s-]', '', value).strip())
     return re.sub('[-\s]+', '-', value)
 
 
