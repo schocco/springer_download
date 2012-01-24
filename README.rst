@@ -8,7 +8,7 @@ Download Script for e-books hosted on Springerlink.com
 :licencse: GPL v3 (http://www.gnu.org/licenses/gpl.html)
 :language: Python
 
-Explanation
+About
 =============
 This is a modified version of `milanw's` download script. It has been 
 restructured for better extensibility and was enhanced with multi-threading 
@@ -27,20 +27,30 @@ The script downloads all chapters of a book and merges them into one PDF file.
 Usage
 ======
 
-|./springer_download.py [OPTIONS]::
-|
-|Options:
-|  -h, --help              Display this usage message
-| -l LINK, --link=LINK    define the link of the book to start downloading
-|  -c ISBN, --content=ISBN define the book to download by it's ISBN
-|
-|LINK:
-|  The link to your the detail page of the ebook of your choice on SpringerLink.
-|  It lists book metadata and has a possibly paginated list of the chapters of the book.
-|  It has the form:
-|    http://springerlink.com/content/HASH/STUFF
-|  Where: HASH is a string consisting of lower-case, latin chars and numbers.
-|         STUFF is optional and looks like ?p=...&p_o=... or similar. Will be stripped.
+``./springer_download.py [OPTIONS]``
+
+================ ======================================================
+Option             Explanation
+================ ======================================================
+-h, --help       Display this usage message
+-l LINK,
+--link=LINK      Defines the link of the book to start downloading
+                 The link to your the detail page of the ebook of your
+                 choice on SpringerLink. It lists book metadata and has
+                 a possibly paginated list of the chapters of the book.
+                 It has the form:
+                 http://springerlink.com/content/HASH/STUFF
+                 Where: HASH is a string consisting of lower-case, 
+                 latin chars and numbers.
+                 STUFF is optional and looks like ?p=...&p_o=... or 
+                 similar. Will be stripped.
+-c ISBN,
+--content=ISBN   Defines the book to download by it's ISBN or content
+                 hash
+
+
+================ ======================================================
+
 
 Thanks
 ======
