@@ -33,7 +33,7 @@ Usage
 Option             Explanation
 ================ ======================================================
 -h, --help       Display this usage message
--l LINK,
+-l LINK			 Same as --link=LINK
 --link=LINK      Defines the link of the book to start downloading
                  The link to your the detail page of the ebook of your
                  choice on SpringerLink. It lists book metadata and has
@@ -44,7 +44,7 @@ Option             Explanation
                  latin chars and numbers.
                  STUFF is optional and looks like ?p=...&p_o=... or 
                  similar. Will be stripped.
--c ISBN,
+-c ISBN			 Same as --content=ISBN
 --content=ISBN   Defines the book to download by it's ISBN or content
                  hash
 
