@@ -121,6 +121,12 @@ class Book(object):
             self.title = match.group(1).strip()
             # remove tags, e.g. <sub>
             self.title = re.sub(r'<[^>]*?>', '', self.title)
+            try:
+                unicode(self.title, "ascii")
+            except UnicodeError:
+                self.title = unicode(self.title, "utf-8")
+            else:
+                pass
             
         # get subtitle
         if match and match.group(2) and match.group(2).strip() != "":
@@ -169,10 +175,10 @@ class Book(object):
             os.chdir(cwd)
             shutil.rmtree(tempDir)
     
-            print "book %s was successfully downloaded, it was saved to %s" % (self.title, self.path)
+            print u"book %s was successfully downloaded, it was saved to %s" % (self.title, self.path)
             log("downloaded %s chapters (%.2fMiB) of %s\n" % (len(self.chapters), os.path.getsize(self.path) / 2.0 ** 20, self.title))
         else: #HL: if merge=False
-            print "book %s was successfully downloaded, unmerged chapters can be found in %s" % (self.title, tempDir)
+            print u"book %s was successfully downloaded, unmerged chapters can be found in %s" % (self.title, tempDir)
             log("downloaded %s chapters of %s\n" % (len(self.chapters), self.title))
             
     def get_path(self):
@@ -320,7 +326,7 @@ def error(msg=""):
 # log to file
 def log(msg=""):
     logFile = open(os.path.join(cwd, 'springer_download.log'), 'a')
-    logFile.write(msg)
+    logFile.write(msg.encode("utf-8"))
     logFile.close()
 
 # based on http://stackoverflow.com/questions/377017/test-if-executable-exists-in-python
