@@ -163,9 +163,8 @@ class Book(object):
             sleep(1)
             
         if merge:
-            print "merging chapters"
+            print "\nmerging chapters..."
             fileList = self.get_file_list()
-            print fileList
             if len(fileList) == 1:
                 shutil.move(fileList[0], self.path)
             else:
@@ -175,10 +174,10 @@ class Book(object):
             os.chdir(cwd)
             shutil.rmtree(tempDir)
     
-            print u"book %s was successfully downloaded, it was saved to %s" % (self.title, self.path)
+            print u"Book %s was successfully downloaded,\nit was saved to %s" % (self.title, self.path)
             log("downloaded %s chapters (%.2fMiB) of %s\n" % (len(self.chapters), os.path.getsize(self.path) / 2.0 ** 20, self.title))
         else: #HL: if merge=False
-            print u"book %s was successfully downloaded, unmerged chapters can be found in %s" % (self.title, tempDir)
+            print u"book %s was successfully downloaded,\nunmerged chapters can be found in %s" % (self.title, tempDir)
             log("downloaded %s chapters of %s\n" % (len(self.chapters), self.title))
             
     def get_path(self):
@@ -207,7 +206,7 @@ class Book(object):
             
 
 
-class Chapter(threading.Thread):
+class Chapter(object):
     '''
     Representation of a chapter in an e-book.
     '''
@@ -216,14 +215,9 @@ class Chapter(threading.Thread):
     index = 0
     
     def __init__(self, url, index):
-        threading.Thread.__init__(self)
         self.url = url
         self.index = index
         self.path = os.path.join(tempDir, "%d.pdf" % self.index)
-        
-    def run(self):
-        'Downloads the chapter as pdf'
-        download(self.url, self.path)      
 
 def pdfcat(fileList, bookTitlePath):
     if findInPath("pdftk") != False:
@@ -337,22 +331,15 @@ def findInPath(prog):
             return exe_file
     return False
 
-# based on http://mail.python.org/pipermail/python-list/2005-April/319818.html
-def _reporthook(numblocks, blocksize, filesize, url=None):
-    #XXX Should handle possible filesize=-1.
-    try:
-        percent = min((numblocks*blocksize*100)/filesize, 100)
-    except:
-        percent = 100
-    if numblocks != 0:
-        sys.stdout.write("\b"*70)
-    sys.stdout.write("%-66s%3d%%" % (url, percent))
-
 
 class Downloader(threading.Thread):
     '''
     Downloader thread.
     '''
+    total_bytes = 0
+    total_bytes_dl = 0
+    shutdown = False # flag for thread termination
+    
     def __init__(self, url, dst, mimes = [], daemon = True):
         threading.Thread.__init__(self)
         self.url = url
@@ -362,10 +349,20 @@ class Downloader(threading.Thread):
             self.mimes = mimes.append(mimetypes.guess_type(dst)[0])
         else:
             self.mimes = mimes
-        
+    
+    @staticmethod
+    def print_status():
+        '''
+        Static method which prints the overall download progress.
+        '''
+        status = r"%10d of %10d Bytes  [%3.2f%%]" % (Downloader.total_bytes_dl, Downloader.total_bytes, Downloader.total_bytes_dl * 100. / Downloader.total_bytes)
+        status = status + chr(8)*(len(status)+1)
+        print status,
+    
     def run(self):
         '''
-        Starts the download from the specified url.
+        Starts the download from the specified url. And adds itself to the
+        static list of threads.
         '''
         txheaders = {   
                  'User-agent': 'Mozilla/5.0',
@@ -379,6 +376,7 @@ class Downloader(threading.Thread):
             if self.mimes and meta.gettype() not in self.mimes:
                 error("Expected mimetype is %s, got %s instead!" % (self.mimes, meta.gettype()))
             print "Downloading: %s : (%s Bytes)" % (self.url, file_size)
+            Downloader.total_bytes += file_size
         
             file_size_dl = 0
             block_sz = 8192
@@ -388,10 +386,9 @@ class Downloader(threading.Thread):
                     break
         
                 file_size_dl += len(dl_buffer)
+                Downloader.total_bytes_dl += len(dl_buffer)
                 f.write(dl_buffer)
-                status = r"%10d  [%3.2f%%]" % (file_size_dl, file_size_dl * 100. / file_size)
-                status = status + chr(8)*(len(status)+1)
-                print status,
+                Downloader.print_status()
         except HTTPError, e:
             print e
             try:
@@ -401,52 +398,7 @@ class Downloader(threading.Thread):
                 pass
             error("%s - occured while downloading %s" % (e, self.url))
         finally:
-            f.close()     
-    
-    
-    
-def download(url, dst, mime=None):
-    '''
-    Uses urllib2 to get a remote file.
-    Prints a progress bar and removes the tempFolder if an HttpException occurs.
-    '''
-    if mime is None:
-        mime = mimetypes.guess_type(dst)[0]
-    txheaders = {   
-                 'User-agent': 'Mozilla/5.0',
-    }
-    req = urllib2.Request(url, headers=txheaders)
-    f = open(dst, 'wb')
-    try:
-        u = urllib2.urlopen(req)        
-        meta = u.info()
-        file_size = int(meta.getheaders("Content-Length")[0])
-        if mime and meta.gettype() != mime:
-            error("Expected mimetype is %s, got %s instead!" % (mime, meta.gettype()))
-        print "Downloading: %s : (%s Bytes)" % (url, file_size)
-    
-        file_size_dl = 0
-        block_sz = 8192
-        while True:
-            dl_buffer = u.read(block_sz)
-            if not dl_buffer:
-                break
-    
-            file_size_dl += len(dl_buffer)
-            f.write(dl_buffer)
-            status = r"%10d  [%3.2f%%]" % (file_size_dl, file_size_dl * 100. / file_size)
-            status = status + chr(8)*(len(status)+1)
-            print status,
-    except HTTPError, e:
-        print e
-        try:
-            shutil.rmtree(tempDir)
-        except IOError:
-            #already deleted
-            pass
-        error("%s - occured while downloading %s" % (e, url))
-    finally:
-        f.close()
+            f.close()
 
 
 def normalize(value):
